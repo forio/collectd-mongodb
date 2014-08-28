@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 #
 # Plugin to collectd statistics from MongoDB
 #
