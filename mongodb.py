@@ -64,7 +64,7 @@ class MongoDB(object):
 
     def __init__(self):
         self.plugin_name = "mongo"
-        self.mongo_host = "172.18.3.21"
+        self.mongo_host = "127.0.0.1"
         self.mongo_port = 27017
         self.mongo_db = ["admin", ]
         self.mongo_user = None
@@ -90,7 +90,7 @@ class MongoDB(object):
 
 
     #def check_rep_lag(con, host, port, warning, critical, percent, perf_data, max_lag, user, passwd):
-    def check_rep_lag(self, percent):
+    def check_rep_lag(self):
         host = self.mongo_host
         port = self.mongo_port
         user = self.mongo_user
@@ -153,19 +153,21 @@ class MongoDB(object):
                             replicationLag = abs(primary_node["optimeDate"] - lastSlaveOpTime).seconds - slaveDelays[member['name']]
                             data = data + member['name'] + " lag=%d;" % replicationLag
                             maximal_lag = max(maximal_lag, replicationLag)
-                    if percent:
-                        err, con = mongo_connect(primary_node['name'].split(':')[0], int(primary_node['name'].split(':')[1]), False, user, passwd)
-                        if err != 0:
-                            return err
-                        primary_timediff = replication_get_time_diff(con)
-                        maximal_lag = int(float(maximal_lag) / float(primary_timediff) * 100)
-                        message = "Maximal lag is " + str(maximal_lag) + " percents"
-                        print message
-                        self.submit('replication', 'maximal-lag-percentage', str(maximal_lag))
-                    else:
-                        message = "Maximal lag is " + str(maximal_lag) + " seconds"
-                        print message
-                        self.submit('replication', 'maximal-lag-seconds', str(maximal_lag))
+
+                    # send message with maximal lag
+                    message = "Maximal lag is " + str(maximal_lag) + " seconds"
+                    print message
+                    self.submit('replication', 'maximal-lag-seconds', str(maximal_lag))
+
+                    # send message with maximal lag in percentage
+                    err, con = mongo_connect(primary_node['name'].split(':')[0], int(primary_node['name'].split(':')[1]), False, user, passwd)
+                    if err != 0:
+                        return err
+                    primary_timediff = replication_get_time_diff(con)
+                    maximal_lag = int(float(maximal_lag) / float(primary_timediff) * 100)
+                    message = "Maximal lag is " + str(maximal_lag) + " percents"
+                    print message
+                    self.submit('replication', 'maximal-lag-percentage', str(maximal_lag))
                     return str(maximal_lag)
             elif host_node["stateStr"] == "ARBITER":
                 print "OK - This is an arbiter"
@@ -187,22 +189,23 @@ class MongoDB(object):
             except:
                 lag = float(optime_lag.seconds + optime_lag.days * 24 * 3600)
 
-            if percent:
-                err, con = mongo_connect(primary_node['name'].split(':')[0], int(primary_node['name'].split(':')[1]), False, user, passwd)
-                if err != 0:
-                    return err
-                primary_timediff = replication_get_time_diff(con)
-                if primary_timediff != 0:
-                    lag = int(float(lag) / float(primary_timediff) * 100)
-                else:
-                    lag = 0
-                message = "Lag is " + str(lag) + " percents"
-                print message
-                self.submit('replication', 'lag-percentage', str(maximal_lag))
+            # send message with lag
+            message = "Lag is " + str(lag) + " seconds"
+            print message
+            self.submit('replication', 'lag-seconds', str(maximal_lag))
+
+            # send message with lag in percentage
+            err, con = mongo_connect(primary_node['name'].split(':')[0], int(primary_node['name'].split(':')[1]), False, user, passwd)
+            if err != 0:
+                return err
+            primary_timediff = replication_get_time_diff(con)
+            if primary_timediff != 0:
+                lag = int(float(lag) / float(primary_timediff) * 100)
             else:
-                message = "Lag is " + str(lag) + " seconds"
-                print message
-                self.submit('replication', 'lag-seconds', str(maximal_lag))
+                lag = 0
+            message = "Lag is " + str(lag) + " percents"
+            print message
+            self.submit('replication', 'lag-percentage', str(maximal_lag))
             return str(lag) 
             #return check_levels(lag, warning + slaveDelays[host_node['name']], critical + slaveDelays[host_node['name']], message)
 
@@ -297,7 +300,6 @@ class MongoDB(object):
 
 mongodb = MongoDB()
 collectd.register_read(mongodb.do_server_status)
-# lag in seconds
-collectd.register_read(mongodb.check_rep_lag(True))
-collectd.register_read(mongodb.check_rep_lag(False))
+# lag in seconds and percentage
+collectd.register_read(mongodb.check_rep_lag)
 collectd.register_config(mongodb.config)
