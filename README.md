@@ -34,6 +34,7 @@ The following is an example Collectd configuration for this plugin:
         <Module mongodb>
             Host "127.0.0.1"
             Password "password"
+            Database "admin"
         </Module>
     </Plugin>
 
