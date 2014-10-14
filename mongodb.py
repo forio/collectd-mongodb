@@ -62,7 +62,6 @@ class MongoDB(object):
         self.plugin_name = "mongo"
         self.mongo_host = "127.0.0.1"
         self.mongo_port = 27017
-        self.mongo_db = ["admin", ]
         self.mongo_user = None
         self.mongo_password = None
 
@@ -92,6 +91,7 @@ class MongoDB(object):
         passwd = self.mongo_password
         perf_data = False
         con = Connection(host=self.mongo_host, port=self.mongo_port, slave_okay=True)
+        self.mongo_db = con.database_names()
         db = con[self.mongo_db[0]]
         if self.mongo_user and self.mongo_password:
             db.authenticate(self.mongo_user, self.mongo_password)
