@@ -60,24 +60,16 @@ class MongoDB(object):
 
     def __init__(self):
         self.plugin_name = "mongo"
-        self.mongo_host = "127.0.0.1"
-        self.mongo_port = 27017
-        self.mongo_db = ""
-        self.mongo_user = None
-        self.mongo_password = None
+        self.servers = []
 
-        self.lockTotalTime = None
-        self.lockTime = None
-        self.accesses = None
-        self.misses = None
 
-    def submit(self, type, instance, value, db=None):
+    def submit(self, conf, type, instance, value, db=None):
         if db:
-            plugin_instance = '%s-%s' % (self.mongo_port, db)
+            plugin_instance = '%s-%s' % (conf['instance'] if conf['instance'] else conf['mongo_port'], db)
         else:
-            plugin_instance = str(self.mongo_port)
+            plugin_instance = str(conf['instance'] if conf['instance'] else conf['mongo_port'])
         v = collectd.Values()
-        v.plugin = self.plugin_name
+        v.plugin = conf['plugin_name']
         v.plugin_instance = plugin_instance
         v.type = type
         v.type_instance = instance
@@ -85,18 +77,18 @@ class MongoDB(object):
         v.dispatch()
 
 
-    def do_server_status(self):
-        host = self.mongo_host
-        port = self.mongo_port
-        user = self.mongo_user
-        passwd = self.mongo_password
+    def do_server_status(self, conf):
+        host = conf['mongo_host']
+        port = conf['mongo_port']
+        user = conf['mongo_user']
+        passwd = conf['mongo_password']
         perf_data = False
-        con = Connection(host=self.mongo_host, port=self.mongo_port, slave_okay=True)
-        if not self.mongo_db:
-            self.mongo_db = con.database_names()
-        db = con[self.mongo_db[0]]
-        if self.mongo_user and self.mongo_password:
-            db.authenticate(self.mongo_user, self.mongo_password)
+        con = Connection(host=host, port=port, slave_okay=True)
+        if not conf['mongo_db']:
+            conf['mongo_db'] = con.database_names()
+        db = con[conf['mongo_db'][0]]
+        if user and passwd:
+            db.authenticate(user, passwd)
         server_status = db.command('serverStatus')
 
         version = server_status['version']
@@ -104,61 +96,45 @@ class MongoDB(object):
 
         # operations
         for k, v in server_status['opcounters'].items():
-            self.submit('total_operations', k, v)
+            self.submit(conf, 'total_operations', k, v)
 
         # memory
         for t in ['resident', 'virtual', 'mapped']:
-            self.submit('memory', t, server_status['mem'][t])
+            self.submit(conf, 'memory', t, server_status['mem'][t])
 
         # connections
-        self.submit('connections', 'connections', server_status['connections']['current'])
+        self.submit(conf, 'connections', 'connections', server_status['connections']['current'])
 
         # locks
-        if self.lockTotalTime is not None and self.lockTime is not None:
-            if self.lockTime == server_status['globalLock']['lockTime']:
+        if conf['lockTotalTime'] is not None and conf['lockTime'] is not None:
+            if conf['lockTime'] == server_status['globalLock']['lockTime']:
                 value = 0.0
             else:
-                value = float(server_status['globalLock']['lockTime'] - self.lockTime) * 100.0 / float(server_status['globalLock']['totalTime'] - self.lockTotalTime)
-            self.submit('percent', 'lock_ratio', value)
+                value = float(server_status['globalLock']['lockTime'] - conf['lockTime']) * 100.0 / float(server_status['globalLock']['totalTime'] - conf['lockTotalTime'])
+            self.submit(conf, 'percent', 'global_lock', value)
 
-        self.lockTotalTime = server_status['globalLock']['totalTime']
-        self.lockTime = server_status['globalLock']['lockTime']
+        # TODO: Check to see if this is broken - probably need to save to the object's conf array rather than the local copy
+        conf['lockTotalTime'] = server_status['globalLock']['totalTime']
+        conf['lockTime'] = server_status['globalLock']['lockTime']
 
-        # indexes
-        accesses = None
-        misses = None
-        index_counters = server_status['indexCounters'] if at_least_2_4 else server_status['indexCounters']['btree']
+        self.submit(conf, 'percent', 'index_missing', server_status['indexCounters']['missRatio'])
 
-        if self.accesses is not None:
-            accesses = index_counters['accesses'] - self.accesses
-            if accesses < 0:
-                accesses = None
-        misses = (index_counters['misses'] or 0) - (self.misses or 0)
-        if misses < 0:
-            misses = None
-        if accesses and misses is not None:
-            self.submit('cache_ratio', 'cache_misses', int(misses * 100 / float(accesses)))
-        else:
-            self.submit('cache_ratio', 'cache_misses', 0)
-        self.accesses = index_counters['accesses']
-        self.misses = index_counters['misses']
-
-        for mongo_db in self.mongo_db:
+        for mongo_db in conf['mongo_db']:
             db = con[mongo_db]
-            if self.mongo_user and self.mongo_password:
-                db.authenticate(self.mongo_user, self.mongo_password)
+            if user and passwd:
+                db.authenticate(user, passwd)
             db_stats = db.command('dbstats')
 
             # stats counts
-            self.submit('counter', 'object_count', db_stats['objects'], mongo_db)
-            self.submit('counter', 'collections', db_stats['collections'], mongo_db)
-            self.submit('counter', 'num_extents', db_stats['numExtents'], mongo_db)
-            self.submit('counter', 'indexes', db_stats['indexes'], mongo_db)
+            self.submit(conf, 'gauge', 'object_count', db_stats['objects'], mongo_db)
+            self.submit(conf, 'gauge', 'collections', db_stats['collections'], mongo_db)
+            self.submit(conf, 'gauge', 'num_extents', db_stats['numExtents'], mongo_db)
+            self.submit(conf, 'gauge', 'indexes', db_stats['indexes'], mongo_db)
 
             # stats sizes
-            self.submit('file_size', 'storage', db_stats['storageSize'], mongo_db)
-            self.submit('file_size', 'index', db_stats['indexSize'], mongo_db)
-            self.submit('file_size', 'data', db_stats['dataSize'], mongo_db)
+            self.submit(conf, 'file_size', 'storage', db_stats['storageSize'], mongo_db)
+            self.submit(conf, 'file_size', 'index', db_stats['indexSize'], mongo_db)
+            self.submit(conf, 'file_size', 'data', db_stats['dataSize'], mongo_db)
 
         # Replica check
 
@@ -220,21 +196,16 @@ class MongoDB(object):
                             data = data + member['name'] + " lag=%d;" % replicationLag
                             maximal_lag = max(maximal_lag, replicationLag)
 
-                    # send message with maximal lag
-                    message = "Maximal lag is " + str(maximal_lag) + " seconds"
-                    print message
-                    self.submit('replication', 'maximal-lag-seconds', str(maximal_lag))
+                    self.submit(conf, 'time_offset', 'maximal-lag-seconds', str(maximal_lag))
 
-                    # send message with maximal lag in percentage
+                    # send maximal lag in percentage
                     err, con = mongo_connect(primary_node['name'].split(':')[0], int(primary_node['name'].split(':')[1]), False, user, passwd)
                     if err != 0:
                         con.disconnect()
                         return err
                     primary_timediff = replication_get_time_diff(con)
                     maximal_lag = int(float(maximal_lag) / float(primary_timediff) * 100)
-                    message = "Maximal lag is " + str(maximal_lag) + " percents"
-                    print message
-                    self.submit('replication', 'maximal-lag-percentage', str(maximal_lag))
+                    self.submit(conf, 'time_offset', 'maximal-lag-percentage', str(maximal_lag))
                     con.disconnect()
                     return str(maximal_lag)
             elif host_node["stateStr"] == "ARBITER":
@@ -257,10 +228,7 @@ class MongoDB(object):
             except:
                 lag = float(optime_lag.seconds + optime_lag.days * 24 * 3600)
 
-            # send message with lag
-            message = "Lag is " + str(lag) + " seconds"
-            print message
-            self.submit('replication', 'lag-seconds', str(lag))
+            self.submit(conf, 'time_offset', 'lag-seconds', str(lag))
 
             # send message with lag in percentage
             err, con = mongo_connect(primary_node['name'].split(':')[0], int(primary_node['name'].split(':')[1]), False, user, passwd)
@@ -272,11 +240,9 @@ class MongoDB(object):
                 lag = int(float(lag) / float(primary_timediff) * 100)
             else:
                 lag = 0
-            message = "Lag is " + str(lag) + " percents"
-            print message
-            self.submit('replication', 'lag-percentage', str(lag))
+            self.submit(conf, 'percent', 'lag-percentage', str(lag))
             con.disconnect()
-            return str(lag) 
+            return str(lag)
             #return check_levels(lag, warning + slaveDelays[host_node['name']], critical + slaveDelays[host_node['name']], message)
 
         except Exception, e:
@@ -285,20 +251,50 @@ class MongoDB(object):
 
 
     def config(self, obj):
+        instance = None
+        plugin_name = 'mongodb'
+        mongo_port = None
+        mongo_host = None
+        mongo_user = None
+        mongo_password = None
+        mongo_db = None
+
         for node in obj.children:
-            if node.key == 'Port':
-                self.mongo_port = int(node.values[0])
+
+            if node.key == 'Instance':
+                instance = node.values[0]
+            elif node.key == 'Name':
+                plugin_name = node.values[0]
+            elif node.key == 'Port':
+                mongo_port = int(node.values[0])
             elif node.key == 'Host':
-                self.mongo_host = node.values[0]
+                mongo_host = node.values[0]
             elif node.key == 'User':
-                self.mongo_user = node.values[0]
+                mongo_user = node.values[0]
             elif node.key == 'Password':
-                self.mongo_password = node.values[0]
+                mongo_password = node.values[0]
             elif node.key == 'Database':
-                self.mongo_db = node.values
+                mongo_db = node.values
             else:
                 collectd.warning("mongodb plugin: Unkown configuration key %s" % node.key)
+                continue
+        self.servers.append({
+            'mongo_host': mongo_host,
+            'mongo_port': mongo_port,
+            'mongo_user': mongo_user,
+            'mongo_password': mongo_password,
+            'mongo_db': mongo_db,
+            'instance': instance,
+            'plugin_name': plugin_name,
+            'lockTime': None,
+            'lockTotalTime': None,
+        })
+
+    def read(self):
+        for conf in self.servers:
+            self.do_server_status(conf)
+
 
 mongodb = MongoDB()
-collectd.register_read(mongodb.do_server_status)
+collectd.register_read(mongodb.read)
 collectd.register_config(mongodb.config)
